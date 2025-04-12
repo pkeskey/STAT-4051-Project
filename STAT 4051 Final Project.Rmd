@@ -1,0 +1,308 @@
+---
+title: "STAT 4051 Final Project"
+author: "Preston Keskey - Student ID: 5762754"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+## Data Merging
+
+```{r}
+library(dplyr)
+
+# 2015–2018 data merges
+pitches   <- read.csv("pitches.csv")
+atbats    <- read.csv("atbats.csv")
+games     <- read.csv("games.csv")
+players   <- read.csv("player_names.csv")
+
+pitches_atbats <- pitches %>%
+  left_join(atbats, by = "ab_id")
+
+all_data <- pitches_atbats %>%
+  left_join(games, by = "g_id")
+
+players <- players %>%
+  mutate(full_name = paste(first_name, last_name))
+
+all_data <- all_data %>%
+  left_join(players, by = c("pitcher_id" = "id")) %>%
+  rename(pitcher_name = full_name) %>%
+  left_join(players, by = c("batter_id" = "id")) %>%
+  rename(batter_name = full_name)
+
+# Read 2019 data
+pitches_2019 <- read.csv("2019_pitches.csv")
+atbats_2019  <- read.csv("2019_atbats.csv")
+games_2019   <- read.csv("2019_games.csv")
+
+# player_names.csv again if needed
+players <- read.csv("player_names.csv") %>%
+  mutate(full_name = paste(first_name, last_name))
+
+# Merge 2019 pitches + atbats + games
+pitches_atbats_2019 <- pitches_2019 %>%
+  left_join(atbats_2019, by = "ab_id")
+
+all_2019_data <- pitches_atbats_2019 %>%
+  left_join(games_2019, by = "g_id")
+
+# Merge player names
+all_2019_data <- all_2019_data %>%
+  left_join(players, by = c("pitcher_id" = "id")) %>%
+  rename(pitcher_name = full_name) %>%
+  left_join(players, by = c("batter_id" = "id")) %>%
+  rename(batter_name = full_name)
+
+all_2019_data <- all_2019_data %>%
+  mutate(
+    # spin_rate: numeric vs character => numeric
+    spin_rate        = as.numeric(spin_rate),
+
+    # numeric vs character -> numeric
+    spin_dir         = as.numeric(spin_dir),
+    type_confidence  = as.numeric(type_confidence),
+    x                = as.numeric(x),
+    y                = as.numeric(y),
+
+    # integer vs logical -> integer
+    nasty            = as.integer(nasty),
+
+    # integer vs character -> integer
+    zone             = as.integer(zone),
+
+    # integer vs numeric -> integer
+    g_id             = as.integer(g_id),
+    inning           = as.integer(inning),
+    p_score          = as.integer(p_score),
+    away_final_score = as.integer(away_final_score),
+    home_final_score = as.integer(home_final_score),
+
+    # character vs numeric -> character
+    top              = as.character(top),
+
+    # integer vs logical -> integer
+    attendance       = as.integer(attendance),
+    elapsed_time     = as.integer(elapsed_time),
+
+    # character vs logical -> character
+    start_time       = as.character(start_time),
+    umpire_1B        = as.character(umpire_1B),
+    umpire_2B        = as.character(umpire_2B),
+    umpire_3B        = as.character(umpire_3B),
+    umpire_HP        = as.character(umpire_HP),
+    weather          = as.character(weather),
+    wind             = as.character(wind)
+  )
+
+common_cols <- intersect(names(all_data), names(all_2019_data))
+for (col_name in common_cols) {
+  class_all    <- class(all_data[[col_name]])[1]
+  class_2019   <- class(all_2019_data[[col_name]])[1]
+  if (class_all != class_2019) {
+    cat(col_name, " => ", class_all, " vs. ", class_2019, "\n")
+  }
+}
+
+all_data_combined <- bind_rows(all_data, all_2019_data)
+nrow(all_data_combined)
+```
+
+# EDA
+
+```{r}
+# Histogram of start speeds
+hist(all_data_combined$start_speed,
+     main = "Distribution of Start Speeds",
+     xlab = "Start Speed (mph)")
+
+# Boxplot of spin rates
+boxplot(all_data_combined$spin_rate,
+        main = "Spin Rate Boxplot",
+        ylab = "Spin Rate (rpm)")
+
+# Scatter plot: velocity vs. spin rate
+plot(all_data_combined$start_speed, all_data_combined$spin_rate,
+     xlab = "Start Speed (mph)",
+     ylab = "Spin Rate (rpm)",
+     main = "Start Speed vs. Spin Rate")
+
+library(dplyr)
+
+# Select numeric columns relevant for correlation
+numeric_cols <- all_data_combined %>%
+  select(start_speed, end_speed, spin_rate, spin_dir,
+         break_angle, break_length, break_y, ax, ay, az, px, pz)
+
+# Omit rows that contain NA in any of those columns
+numeric_cols <- na.omit(numeric_cols)
+
+# Compute correlation matrix
+cor_mat <- cor(numeric_cols)
+
+cor_mat
+
+# install.packages("corrplot") if not installed
+library(corrplot)
+corrplot(cor_mat, method = "circle")
+
+# Count pitch types
+table(all_data_combined$pitch_type)
+
+# Barplot of pitch types
+barplot(table(all_data_combined$pitch_type),
+        main = "Frequency of Pitch Types",
+        xlab = "Pitch Type",
+        ylab = "Count")
+```
+
+# PCA
+
+```{r}
+library(dplyr)
+
+pca_vars <- all_data_combined %>%
+  select(start_speed, spin_rate, spin_dir, px, pz, ax, ay, az) %>%
+  na.omit()
+
+# Perform PCA with centering and scaling
+pca_res <- prcomp(pca_vars, center = TRUE, scale. = TRUE)
+
+# Loadings (rotation)
+pca_res$rotation
+
+# First few rows of the PCA scores
+head(pca_res$x)
+
+biplot(pca_res, scale = 0)
+
+library(ggplot2)
+
+pca_scores <- as.data.frame(pca_res$x)  # each row is a pitch, columns = PC1, PC2, ...
+ggplot(pca_scores, aes(PC1, PC2)) +
+  geom_point(alpha = 0.5) +
+  labs(title = "PCA of Pitch Data", x = "PC1", y = "PC2") +
+  theme_minimal()
+
+# Make sure the row alignment is correct. If you used na.omit() above, track which rows are kept:
+pca_scores$pitch_type <- all_data_combined$pitch_type[!is.na(all_data_combined$start_speed) &
+                                                       !is.na(all_data_combined$spin_rate) &
+                                                       !is.na(all_data_combined$spin_dir) &
+                                                       !is.na(all_data_combined$px) &
+                                                       !is.na(all_data_combined$pz) &
+                                                       !is.na(all_data_combined$ax) &
+                                                       !is.na(all_data_combined$ay) &
+                                                       !is.na(all_data_combined$az)]
+
+ggplot(pca_scores, aes(x = PC1, y = PC2, color = pitch_type)) +
+  geom_point(alpha = 0.5) +
+  labs(title = "PCA: Colored by Pitch Type") +
+  theme_minimal()
+```
+
+# Clustering
+
+```{r}
+# Use pca_vars or the scaled version
+scaled_mat <- scale(pca_vars)
+
+set.seed(123)
+k <- 4  # arbitrary choice
+km_res <- kmeans(scaled_mat, centers = k, nstart = 20)
+
+# Cluster labels
+km_clusters <- km_res$cluster
+table(km_clusters)
+
+library(ggplot2)
+
+pca_scores$kmeans_cluster <- factor(km_clusters)
+
+ggplot(pca_scores, aes(x = PC1, y = PC2, color = kmeans_cluster)) +
+  geom_point(alpha = 0.5) +
+  labs(title = "K-Means Clusters (k=4) in PCA Space") +
+  theme_minimal()
+
+wss <- numeric(10)
+for (i in 1:10) {
+  km_temp <- kmeans(scaled_mat, centers = i, nstart = 20)
+  wss[i] <- km_temp$tot.withinss
+}
+
+plot(1:10, wss, type = "b",
+     xlab = "Number of clusters (k)",
+     ylab = "Total within-cluster SS",
+     main = "Elbow Method for K-Means")
+
+dist_mat <- dist(scaled_mat, method = "euclidean")
+hc <- hclust(dist_mat, method = "ward.D2")
+
+plot(hc, labels = FALSE, main = "Hierarchical Clustering Dendrogram")
+rect.hclust(hc, k = 4, border = "red")  # highlight 4 clusters
+
+# install.packages("kernlab") if needed
+library(kernlab)
+
+specc_res <- specc(as.matrix(scaled_mat), centers = 4)
+spectral_clusters <- specc_res@.Data  # cluster assignments
+
+pca_scores$spectral_cluster <- factor(spectral_clusters)
+
+ggplot(pca_scores, aes(PC1, PC2, color = spectral_cluster)) +
+  geom_point(alpha = 0.5) +
+  labs(title = "Spectral Clustering (k=4) in PCA Space") +
+  theme_minimal()
+```
+
+# Example Predictive Model
+
+This is classify a strike vs not a strike. We can do something different, like pitch type classification, run expectancy, or something else.
+
+```{r}
+library(dplyr)
+
+model_data <- all_data_combined %>%
+  filter(!is.na(pitch_type)) %>%
+  mutate(
+    pitch_type = factor(pitch_type),
+    # Ensure game-state columns are numeric or factor
+    outs  = as.numeric(outs),
+    on_1b = as.numeric(on_1b),
+    on_2b = as.numeric(on_2b),
+    on_3b = as.numeric(on_3b)
+  )
+
+# Pick columns
+model_vars <- c("pitch_type", 
+                "start_speed", "spin_rate", "px", "pz",
+                "b_count", "s_count", "outs",
+                "on_1b", "on_2b", "on_3b")
+
+model_data <- model_data[model_vars] %>% na.omit()
+
+set.seed(123)
+train_inds <- sample(seq_len(nrow(model_data)), size = 0.8 * nrow(model_data))
+train_df <- model_data[train_inds, ]
+test_df  <- model_data[-train_inds, ]
+
+# install.packages("randomForest") if not installed
+library(randomForest)
+
+rf_model <- randomForest(
+  pitch_type ~ ., 
+  data = train_df,
+  ntree = 100
+)
+
+print(rf_model)           # OOB error rate, confusion matrix
+importance(rf_model)      # variable importance
+
+library(caret)  # for confusionMatrix
+
+rf_preds <- predict(rf_model, newdata = test_df)
+conf_mat <- confusionMatrix(rf_preds, test_df$pitch_type)
+conf_mat
+
+# Accuracy:
+conf_mat$overall["Accuracy"]
+```
